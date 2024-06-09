@@ -1,0 +1,21 @@
+
+indexing-settings:
+  sites:
+    - url: https://volochek.life/
+      name: Volochek.Life
+    - url: https://www.skillbox.ru
+      name: Skillbox
+    - url: https://www.playback.ru
+      name: PlayBack.Ru
+server:
+  port: 8080
+spring:
+  datasource:
+    username: root
+    password: 17012007kir_#*
+    url: jdbc:mysql://localhost:3306/search_engine?useSSL=false&requireSSL=false&allowPublicKeyRetrieval=true
+
+  jpa:
+    hibernate:
+       ddl-auto: update
+    show-sql: true
