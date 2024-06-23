@@ -1,12 +1,17 @@
 package searchengine.model.entities;
 
 import lombok.Data;
+import lombok.EqualsAndHashCode;
+import lombok.Getter;
+import lombok.Setter;
 
 import javax.persistence.*;
 
 @Entity
 @Table(name = "page", indexes = @Index(columnList = "path", unique = true))
-@Data
+@Getter
+@Setter
+@EqualsAndHashCode(onlyExplicitlyIncluded = true)
 public class Page {
 
     @Id
@@ -14,7 +19,7 @@ public class Page {
     private Integer id;
 
     @JoinColumn(name = "site_id", referencedColumnName = "id", nullable = false)
-    @ManyToOne(cascade = CascadeType.ALL)
+    @ManyToOne
     private Site site;
 
     @Column(name = "path", nullable = false, columnDefinition = "TEXT")

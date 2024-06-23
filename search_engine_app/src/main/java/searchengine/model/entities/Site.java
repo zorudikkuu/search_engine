@@ -1,11 +1,13 @@
 package searchengine.model.entities;
 
 import lombok.Data;
+import lombok.EqualsAndHashCode;
 import searchengine.model.IndexingStatus;
 import searchengine.model.entities.Page;
 
 import javax.persistence.*;
 import java.sql.Timestamp;
+import java.time.LocalDateTime;
 import java.util.Set;
 
 @Entity
@@ -21,7 +23,7 @@ public class Site {
     private IndexingStatus indexingStatus = IndexingStatus.FAILED;
 
     @Column(name = "status_time", nullable = false)
-    private Timestamp statusTime;
+    private LocalDateTime statusTime;
 
     @Column(name = "last_error", columnDefinition = "TEXT")
     private String lastError;
@@ -32,7 +34,7 @@ public class Site {
     @Column(name = "name", nullable = false, columnDefinition = "VARCHAR(255)")
     private String name;
 
-    @OneToMany(mappedBy = "site")
+    @OneToMany(mappedBy = "site", targetEntity = Page.class, fetch = FetchType.EAGER)
     private Set<Page> pageSet;
 
     public void addPage (Page page) {
