@@ -1,9 +1,6 @@
 package searchengine.services;
 
-import com.sun.source.tree.TryTree;
-import org.aspectj.weaver.ast.Call;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 import searchengine.config.SiteDto;
 import searchengine.config.SitesList;
 import searchengine.dto.responses.IndexingResponse;
@@ -27,12 +24,14 @@ public class IndexingServiceImpl implements IndexingService {
     private final SiteRepository siteRepository;
     private final PageRepository pageRepository;
     private final CountDownLatch latch;
+    private final List<ForkJoinPool> pools = new ArrayList<>();
+
     public IndexingServiceImpl (SitesList sitesList, SiteRepository siteRepository, PageRepository pageRepository) {
         this.sitesList = sitesList;
         this.siteRepository = siteRepository;
         this.pageRepository = pageRepository;
         this.executor = Executors.newFixedThreadPool(sitesList.getSites().size());
-        this.latch = new CountDownLatch(1);
+        this.latch = new CountDownLatch(sitesList.getSites().size());
     }
 
     @Override
@@ -54,6 +53,7 @@ public class IndexingServiceImpl implements IndexingService {
                 WebParserTask task = new WebParserTask(indexingSite, indexingSite.getUrl(), siteRepository, pageRepository, new AtomicBoolean(true));
                 ForkJoinPool forkJoinPool = new ForkJoinPool();
                 forkJoinPool.invoke(task);
+                pools.add(forkJoinPool);
                 if (task.getIsIndexing().get()) {
                     indexingSite.setIndexingStatus(IndexingStatus.INDEXED);
                     indexingSite.setStatusTime(LocalDateTime.now());
@@ -88,7 +88,20 @@ public class IndexingServiceImpl implements IndexingService {
             response.setError("Индексация не запущена");
         }
 
+        pools.forEach(pool -> {
+            pool.shutdownNow();
+            try {
+                if (pool.awaitTermination(30, TimeUnit.SECONDS)) {
+                    System.out.println("fjp закрыт");
+                } else {
+                    System.out.println("fjp не закрыт");
+                }
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+        });
         executor.shutdownNow();
+        System.out.println("Остановка индексации закончилась");
         siteRepository
                 .findAll()
                 .stream()

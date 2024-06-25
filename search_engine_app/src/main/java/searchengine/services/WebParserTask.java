@@ -3,6 +3,7 @@ package searchengine.services;
 import lombok.Data;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
+import lombok.Setter;
 import org.jsoup.Connection;
 import org.jsoup.HttpStatusException;
 import org.jsoup.Jsoup;
@@ -10,6 +11,7 @@ import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
+import org.springframework.beans.factory.annotation.Autowired;
 import searchengine.model.IndexingStatus;
 import searchengine.model.entities.Page;
 import searchengine.model.entities.Site;
@@ -25,18 +27,18 @@ import java.util.concurrent.RecursiveTask;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class WebParserTask extends RecursiveAction {
-    private static Site site = new Site();
+    private final Site site;
     private final String rootLink;
-    private static SiteRepository siteRepository;
-    private static PageRepository pageRepository;
+    private final SiteRepository siteRepository;
+    private final PageRepository pageRepository;
     @Getter
-    private final AtomicBoolean isIndexing;
+    private AtomicBoolean isIndexing;
     private final List<WebParserTask> taskList = new ArrayList<>();
 
     public WebParserTask (Site site, String rootLink, SiteRepository siteRepository, PageRepository pageRepository, AtomicBoolean isIndexing) {
-        WebParserTask.site = site;
-        WebParserTask.siteRepository = siteRepository;
-        WebParserTask.pageRepository = pageRepository;
+        this.site = site;
+        this.siteRepository = siteRepository;
+        this.pageRepository = pageRepository;
         this.isIndexing = isIndexing;
         this.rootLink = rootLink;
     }
@@ -53,8 +55,8 @@ public class WebParserTask extends RecursiveAction {
             return;
         }
 
-        Document document = null;
-        Connection.Response response = null;
+        Document document;
+        Connection.Response response;
         try {
             response = getResponse(rootLink);
             document = getDocument(rootLink);
@@ -64,9 +66,9 @@ public class WebParserTask extends RecursiveAction {
             site.setLastError(e.getMessage() + " --> Ошибка при подключении к странице! (" + rootLink + ")");
             siteRepository.save(site);
             isIndexing.set(false);
+            return;
         }
 
-        assert document != null;
         Elements links = document.select("a");
         for (Element link : links) {
             String href = link.attr("href");
@@ -78,9 +80,11 @@ public class WebParserTask extends RecursiveAction {
                     absHref.startsWith(site.getUrl()) && !absHref.contains("#") && pageRepository.findByPath(href).isEmpty() &&
                             !href.toLowerCase().endsWith(".png") && !href.toLowerCase().endsWith(".svg") &&
                             !href.toLowerCase().endsWith(".jpg") && !href.toLowerCase().endsWith(".jpeg") &&
+                            !href.toLowerCase().endsWith(".pdf") && !href.toLowerCase().endsWith(".docx") &&
                             !absHref.contains("%") && !absHref.contains("?")
             ) {
-                pageRepository.save(getPage(href, response.statusCode(), document.html()));
+                Page pageEntity = getPage(href, response.statusCode(), document.html());
+                pageRepository.save(pageEntity);
                 WebParserTask task = new WebParserTask(site, absHref.replace("www.", ""), siteRepository, pageRepository, isIndexing);
                 taskList.add(task);
             }
@@ -121,5 +125,9 @@ public class WebParserTask extends RecursiveAction {
         page.setPath(link);
         page.setContent(content);
         return page;
+    }
+
+    public void setIsIndexing(boolean newValue) {
+        this.isIndexing.set(newValue);
     }
 }

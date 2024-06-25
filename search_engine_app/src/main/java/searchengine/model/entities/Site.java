@@ -2,6 +2,8 @@ package searchengine.model.entities;
 
 import lombok.Data;
 import lombok.EqualsAndHashCode;
+import lombok.Getter;
+import lombok.Setter;
 import searchengine.model.IndexingStatus;
 import searchengine.model.entities.Page;
 
@@ -12,7 +14,8 @@ import java.util.Set;
 
 @Entity
 @Table(name = "site")
-@Data
+@Getter
+@Setter
 public class Site {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)

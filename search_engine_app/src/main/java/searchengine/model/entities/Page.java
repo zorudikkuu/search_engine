@@ -11,7 +11,6 @@ import javax.persistence.*;
 @Table(name = "page", indexes = @Index(columnList = "path", unique = true))
 @Getter
 @Setter
-@EqualsAndHashCode(onlyExplicitlyIncluded = true)
 public class Page {
 
     @Id
