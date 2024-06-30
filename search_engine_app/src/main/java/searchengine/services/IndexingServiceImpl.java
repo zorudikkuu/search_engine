@@ -1,8 +1,10 @@
 package searchengine.services;
 
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import searchengine.config.SiteDto;
 import searchengine.config.SitesList;
+import searchengine.config.WebConnection;
 import searchengine.dto.responses.IndexingResponse;
 import searchengine.model.IndexingStatus;
 import searchengine.model.entities.Site;
@@ -10,7 +12,6 @@ import searchengine.model.repositories.PageRepository;
 import searchengine.model.repositories.SiteRepository;
 
 import java.time.LocalDateTime;
-import java.util.ArrayList;
 import java.util.List;
 
 import java.util.Optional;
@@ -20,56 +21,42 @@ import java.util.concurrent.atomic.AtomicBoolean;
 @Service
 public class IndexingServiceImpl implements IndexingService {
     private final SitesList sitesList;
-    private final ExecutorService executor;
+    private ExecutorService executor;
     private final SiteRepository siteRepository;
     private final PageRepository pageRepository;
-    private final CountDownLatch latch;
-    private final List<ForkJoinPool> pools = new ArrayList<>();
+    private CountDownLatch latch;
+    private final ForkJoinPool forkJoinPool = new ForkJoinPool();
+    private final WebConnection webConnection;
 
-    public IndexingServiceImpl (SitesList sitesList, SiteRepository siteRepository, PageRepository pageRepository) {
+    public IndexingServiceImpl (SitesList sitesList, SiteRepository siteRepository, PageRepository pageRepository, WebConnection webConnection) {
         this.sitesList = sitesList;
         this.siteRepository = siteRepository;
         this.pageRepository = pageRepository;
-        this.executor = Executors.newFixedThreadPool(sitesList.getSites().size());
-        this.latch = new CountDownLatch(sitesList.getSites().size());
+        this.webConnection = webConnection;
     }
 
     @Override
     public IndexingResponse startIndexing() {
         IndexingResponse response = new IndexingResponse();
-        List<SiteDto> sites = sitesList.getSites();
         if (isIndexing(siteRepository.findAll())) {
             response.setResult(false);
             response.setError("Индексация уже запущена");
             return response;
         }
 
+        List<SiteDto> sites = sitesList.getSites();
+        executor = Executors.newFixedThreadPool(sitesList.getSites().size());
+        latch = new CountDownLatch(sitesList.getSites().size());
+
         for (SiteDto siteDto : sites) {
-            executor.submit(() -> {
-                Optional<Site> site = siteRepository.findByUrl(siteDto.getUrl());
-                site.ifPresent(siteRepository::delete);
-                Site indexingSite = getSiteEntity(siteDto);
-
-                WebParserTask task = new WebParserTask(indexingSite, indexingSite.getUrl(), siteRepository, pageRepository, new AtomicBoolean(true));
-                ForkJoinPool forkJoinPool = new ForkJoinPool();
-                forkJoinPool.invoke(task);
-                pools.add(forkJoinPool);
-                if (task.getIsIndexing().get()) {
-                    indexingSite.setIndexingStatus(IndexingStatus.INDEXED);
-                    indexingSite.setStatusTime(LocalDateTime.now());
-                    siteRepository.save(indexingSite);
-                }
-
-                latch.countDown();
-                System.out.println("Count is down, current count is: " + latch.getCount());
-            });
+            executor.submit(() -> executeSiteParsing(siteDto));
         }
+
         new Thread(() -> {
-            System.out.println("Latch is waiting");
             try {
                 latch.await();
             } catch (InterruptedException e) {
-                throw new RuntimeException(e);
+                System.err.println(e.getMessage());
             }
 
             executor.shutdown();
@@ -88,20 +75,17 @@ public class IndexingServiceImpl implements IndexingService {
             response.setError("Индексация не запущена");
         }
 
-        pools.forEach(pool -> {
-            pool.shutdownNow();
-            try {
-                if (pool.awaitTermination(30, TimeUnit.SECONDS)) {
-                    System.out.println("fjp закрыт");
-                } else {
-                    System.out.println("fjp не закрыт");
-                }
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
+        forkJoinPool.shutdownNow();
+        try {
+            if (forkJoinPool.awaitTermination(30, TimeUnit.SECONDS)) {
+                System.out.println("fjp terminated");
             }
-        });
+        } catch (InterruptedException e) {
+            System.err.println(e.getMessage() + " (Termination failed)");
+        }
         executor.shutdownNow();
-        System.out.println("Остановка индексации закончилась");
+        System.out.println("Индексация прервана");
+
         siteRepository
                 .findAll()
                 .stream()
@@ -114,6 +98,23 @@ public class IndexingServiceImpl implements IndexingService {
                 });
         response.setResult(true);
         return response;
+    }
+
+    private void executeSiteParsing (SiteDto siteDto) {
+        Optional<Site> site = siteRepository.findByUrl(siteDto.getUrl());
+        site.ifPresent(siteRepository::delete);
+        Site indexingSite = getSiteEntity(siteDto);
+
+        WebParserTask task = new WebParserTask(indexingSite, indexingSite.getUrl(), siteRepository, pageRepository, new AtomicBoolean(true), webConnection);
+        forkJoinPool.invoke(task);
+
+        if (task.getIsIndexed().get()) {
+            indexingSite.setIndexingStatus(IndexingStatus.INDEXED);
+            indexingSite.setStatusTime(LocalDateTime.now());
+            siteRepository.save(indexingSite);
+        }
+
+        latch.countDown();
     }
 
     private Site getSiteEntity (SiteDto siteDto) {
@@ -131,6 +132,5 @@ public class IndexingServiceImpl implements IndexingService {
                 .stream()
                 .map(Site::getIndexingStatus)
                 .anyMatch(status -> status.equals(IndexingStatus.INDEXING));
-
     }
 }

@@ -1,17 +1,13 @@
 package searchengine.services;
 
-import lombok.Data;
 import lombok.Getter;
-import lombok.RequiredArgsConstructor;
-import lombok.Setter;
 import org.jsoup.Connection;
-import org.jsoup.HttpStatusException;
 import org.jsoup.Jsoup;
 
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
-import org.springframework.beans.factory.annotation.Autowired;
+import searchengine.config.WebConnection;
 import searchengine.model.IndexingStatus;
 import searchengine.model.entities.Page;
 import searchengine.model.entities.Site;
@@ -23,23 +19,34 @@ import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.RecursiveAction;
-import java.util.concurrent.RecursiveTask;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 public class WebParserTask extends RecursiveAction {
+
+    private static WebConnection connectionAssets;
     private final Site site;
     private final String rootLink;
     private final SiteRepository siteRepository;
     private final PageRepository pageRepository;
     @Getter
-    private AtomicBoolean isIndexing;
+    private AtomicBoolean isIndexed;
     private final List<WebParserTask> taskList = new ArrayList<>();
+    private static final List<String> invalidExtensions = Arrays.asList(".png", ".svg", "jpg", "jpeg", ".gif", ".pdf", ".doc", ".docx", ".xlsx", ".eps", ".zip");
 
-    public WebParserTask (Site site, String rootLink, SiteRepository siteRepository, PageRepository pageRepository, AtomicBoolean isIndexing) {
+    public WebParserTask (Site site, String rootLink, SiteRepository siteRepository, PageRepository pageRepository, AtomicBoolean isIndexed, WebConnection webConnection) {
+        this.site = site;
+        this.rootLink = rootLink;
+        this.siteRepository = siteRepository;
+        this.pageRepository = pageRepository;
+        this.isIndexed = isIndexed;
+        connectionAssets = webConnection;
+    }
+
+    public WebParserTask (Site site, String rootLink, SiteRepository siteRepository, PageRepository pageRepository, AtomicBoolean isIndexed) {
         this.site = site;
         this.siteRepository = siteRepository;
         this.pageRepository = pageRepository;
-        this.isIndexing = isIndexing;
+        this.isIndexed = isIndexed;
         this.rootLink = rootLink;
     }
 
@@ -48,10 +55,7 @@ public class WebParserTask extends RecursiveAction {
         try {
             Thread.sleep(1000);
         } catch (InterruptedException e) {
-            throw new RuntimeException(e);
-        }
-
-        if (!isIndexing.get()) {
+            failedIndexingResponse(e.getMessage() + " Индексация прервана, попробуйте еще раз.");
             return;
         }
 
@@ -61,11 +65,7 @@ public class WebParserTask extends RecursiveAction {
             response = getResponse(rootLink);
             document = getDocument(rootLink);
         } catch (IOException e) {
-            site.setIndexingStatus(IndexingStatus.FAILED);
-            site.setStatusTime(LocalDateTime.now());
-            site.setLastError(e.getMessage() + " --> Ошибка при подключении к странице! (" + rootLink + ")");
-            siteRepository.save(site);
-            isIndexing.set(false);
+            failedIndexingResponse(e.getMessage() + " --> Ошибка при подключении к странице. (" + rootLink + ")");
             return;
         }
 
@@ -76,16 +76,10 @@ public class WebParserTask extends RecursiveAction {
             site.setStatusTime(LocalDateTime.now());
             siteRepository.save(site);
 
-            if (
-                    absHref.startsWith(site.getUrl()) && !absHref.contains("#") && pageRepository.findByPath(href).isEmpty() &&
-                            !href.toLowerCase().endsWith(".png") && !href.toLowerCase().endsWith(".svg") &&
-                            !href.toLowerCase().endsWith(".jpg") && !href.toLowerCase().endsWith(".jpeg") &&
-                            !href.toLowerCase().endsWith(".pdf") && !href.toLowerCase().endsWith(".docx") &&
-                            !absHref.contains("%") && !absHref.contains("?")
-            ) {
+            if (linkIsValid(href, absHref)) {
                 Page pageEntity = getPage(href, response.statusCode(), document.html());
                 pageRepository.save(pageEntity);
-                WebParserTask task = new WebParserTask(site, absHref.replace("www.", ""), siteRepository, pageRepository, isIndexing);
+                WebParserTask task = new WebParserTask(site, absHref.replace("www.", ""), siteRepository, pageRepository, isIndexed);
                 taskList.add(task);
             }
         }
@@ -93,28 +87,34 @@ public class WebParserTask extends RecursiveAction {
         for (WebParserTask task : taskList) {
             task.fork();
         }
-
         for (WebParserTask task : taskList) {
             task.join();
         }
+    }
 
+    private boolean linkIsValid (String href, String absHref) {
+        boolean hasValidExtension = invalidExtensions.stream().noneMatch(extension -> href.toLowerCase().endsWith(extension));
+        boolean isUnique = pageRepository.findByPath(href).isEmpty();
+        //boolean notRequest = !absHref.contains("&") && !absHref.contains("?") && !absHref.contains("%");
+
+        return hasValidExtension && isUnique && absHref.startsWith(site.getUrl()) && !absHref.contains("#");
     }
 
     private Connection.Response getResponse (String link) throws IOException {
         return Jsoup
                 .connect(link)
-                .timeout(60000)
-                .userAgent("Mozilla/5.0 (Windows; U; WindowsNT 5.1; en-US; rv1.8.1.6) Gecko/20070725 Firefox/2.0.0.6")
-                .referrer("http://www.google.com")
+                .timeout(connectionAssets.getTimeout())
+                .userAgent(connectionAssets.getAgent())
+                .referrer(connectionAssets.getReferrer())
                 .execute();
     }
 
     private Document getDocument (String link) throws IOException {
         return Jsoup
                 .connect(link)
-                .timeout(60000)
-                .userAgent("Mozilla/5.0 (Windows; U; WindowsNT 5.1; en-US; rv1.8.1.6) Gecko/20070725 Firefox/2.0.0.6")
-                .referrer("http://www.google.com")
+                .timeout(connectionAssets.getTimeout())
+                .userAgent(connectionAssets.getAgent())
+                .referrer(connectionAssets.getReferrer())
                 .get();
     }
 
@@ -127,7 +127,11 @@ public class WebParserTask extends RecursiveAction {
         return page;
     }
 
-    public void setIsIndexing(boolean newValue) {
-        this.isIndexing.set(newValue);
+    private void failedIndexingResponse (String errorMessage) {
+        site.setIndexingStatus(IndexingStatus.FAILED);
+        site.setStatusTime(LocalDateTime.now());
+        site.setLastError(errorMessage);
+        siteRepository.save(site);
+        isIndexed.set(false);
     }
 }

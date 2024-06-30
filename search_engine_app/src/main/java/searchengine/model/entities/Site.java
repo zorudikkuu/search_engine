@@ -37,7 +37,7 @@ public class Site {
     @Column(name = "name", nullable = false, columnDefinition = "VARCHAR(255)")
     private String name;
 
-    @OneToMany(mappedBy = "site", targetEntity = Page.class, fetch = FetchType.EAGER)
+    @OneToMany(mappedBy = "site", targetEntity = Page.class, fetch = FetchType.EAGER, cascade = CascadeType.ALL)
     private Set<Page> pageSet;
 
     public void addPage (Page page) {

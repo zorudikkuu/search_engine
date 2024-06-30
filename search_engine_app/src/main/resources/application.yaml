@@ -1,12 +1,12 @@
 
 indexing-settings:
   sites:
-    - url: https://volochek.life/
-      name: Volochek.Life
-    - url: https://www.skillbox.ru
-      name: Skillbox
-    - url: https://www.playback.ru
-      name: PlayBack.Ru
+    - url: https://sendel.ru/
+      name: sendel
+web-connection-settings:
+  agent: Mozilla/5.0 (Windows; U; WindowsNT 5.1; en-US; rv1.8.1.6) Gecko/20070725 Firefox/2.0.0.6
+  referrer: http://www.google.com
+  timeout: 60000
 server:
   port: 8080
 spring:
@@ -14,7 +14,6 @@ spring:
     username: root
     password: 17012007kir_#*
     url: jdbc:mysql://localhost:3306/search_engine?useSSL=false&requireSSL=false&allowPublicKeyRetrieval=true
-
   jpa:
     hibernate:
        ddl-auto: update
