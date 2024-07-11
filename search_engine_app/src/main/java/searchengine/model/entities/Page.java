@@ -6,6 +6,8 @@ import lombok.Getter;
 import lombok.Setter;
 
 import javax.persistence.*;
+import javax.persistence.Index;
+import java.util.Set;
 
 @Entity
 @Table(name = "page", indexes = @Index(columnList = "path", unique = true))
@@ -29,4 +31,7 @@ public class Page {
 
     @Column(name = "content", nullable = false, columnDefinition = "MEDIUMTEXT")
     private String content;
+
+    @OneToMany(mappedBy = "page", targetEntity = searchengine.model.entities.Index.class, cascade = CascadeType.ALL)
+    private Set<searchengine.model.entities.Index> IndexSet;
 }

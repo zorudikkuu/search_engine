@@ -1,20 +1,28 @@
 package searchengine.services;
 
-import org.springframework.beans.factory.annotation.Autowired;
+import lombok.Getter;
+import org.jsoup.Connection;
 import org.springframework.stereotype.Service;
 import searchengine.config.SiteDto;
 import searchengine.config.SitesList;
 import searchengine.config.WebConnection;
 import searchengine.dto.responses.IndexingResponse;
 import searchengine.model.IndexingStatus;
+import searchengine.model.entities.Index;
+import searchengine.model.entities.Lemma;
+import searchengine.model.entities.Page;
 import searchengine.model.entities.Site;
+import searchengine.model.repositories.IndexRepository;
+import searchengine.model.repositories.LemmaRepository;
 import searchengine.model.repositories.PageRepository;
 import searchengine.model.repositories.SiteRepository;
 
+import java.io.IOException;
+import java.net.URLDecoder;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
-import java.util.List;
+import java.util.*;
 
-import java.util.Optional;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -24,15 +32,20 @@ public class IndexingServiceImpl implements IndexingService {
     private ExecutorService executor;
     private final SiteRepository siteRepository;
     private final PageRepository pageRepository;
+    private final LemmaRepository lemmaRepository;
     private CountDownLatch latch;
     private final ForkJoinPool forkJoinPool = new ForkJoinPool();
-    private final WebConnection webConnection;
+    private final PageIndexer pageIndexer;
 
-    public IndexingServiceImpl (SitesList sitesList, SiteRepository siteRepository, PageRepository pageRepository, WebConnection webConnection) {
+    public IndexingServiceImpl (SitesList sitesList, SiteRepository siteRepository,
+                                PageRepository pageRepository, LemmaRepository lemmaRepository,
+                                PageIndexer pageIndexer
+    ) {
         this.sitesList = sitesList;
         this.siteRepository = siteRepository;
         this.pageRepository = pageRepository;
-        this.webConnection = webConnection;
+        this.lemmaRepository = lemmaRepository;
+        this.pageIndexer = pageIndexer;
     }
 
     @Override
@@ -49,19 +62,13 @@ public class IndexingServiceImpl implements IndexingService {
         latch = new CountDownLatch(sitesList.getSites().size());
 
         for (SiteDto siteDto : sites) {
-            executor.submit(() -> executeSiteParsing(siteDto));
+            executor.submit(() -> {
+                executeSiteParsing(siteDto);
+                latch.countDown();
+            });
         }
 
-        new Thread(() -> {
-            try {
-                latch.await();
-            } catch (InterruptedException e) {
-                System.err.println(e.getMessage());
-            }
-
-            executor.shutdown();
-            System.out.println("Индексация завершена");
-        }).start();
+        getWaitingThread().start();
 
         response.setResult(true);
         return response;
@@ -73,6 +80,7 @@ public class IndexingServiceImpl implements IndexingService {
         if (!isIndexing(siteRepository.findAll())) {
             response.setResult(false);
             response.setError("Индексация не запущена");
+            return response;
         }
 
         forkJoinPool.shutdownNow();
@@ -100,12 +108,63 @@ public class IndexingServiceImpl implements IndexingService {
         return response;
     }
 
-    private void executeSiteParsing (SiteDto siteDto) {
-        Optional<Site> site = siteRepository.findByUrl(siteDto.getUrl());
-        site.ifPresent(siteRepository::delete);
-        Site indexingSite = getSiteEntity(siteDto);
+    @Override
+    public IndexingResponse indexPage(String url) {
+        IndexingResponse response = new IndexingResponse();
+        latch = new CountDownLatch(1);
 
-        WebParserTask task = new WebParserTask(indexingSite, indexingSite.getUrl(), siteRepository, pageRepository, new AtomicBoolean(true), webConnection);
+        String decodedUrl = URLDecoder.decode(url, StandardCharsets.UTF_8);
+        String absHref = decodedUrl.substring(decodedUrl.indexOf("=") + 1);
+        int endDomainIndex = absHref.indexOf("/", absHref.indexOf("//") + 2);
+        String domain = absHref.substring(0, endDomainIndex + 1);
+
+        List<SiteDto> siteList = sitesList.getSites();
+        SiteDto siteByUrl = null;
+        for (SiteDto siteDto : siteList) {
+            if (siteDto.getUrl().equals(domain)) {
+                siteByUrl = siteDto;
+            }
+        }
+
+        Site site;
+        if (!(siteByUrl == null)) {
+            site = siteRepository.findByUrl(domain).isPresent() ? siteRepository.findByUrl(domain).get() : saveSiteEntity(siteByUrl, IndexingStatus.INDEXED);
+            siteRepository.save(site);
+        } else {
+            response.setResult(false);
+            response.setError("Данная страница находится за пределами сайтов, " +
+                    "указанных в конфигурационном файле");
+            return response;
+        }
+
+        Optional<Page> optionalPage = pageRepository.findByPath(absHref.substring(endDomainIndex));
+        optionalPage.ifPresent(this::clearPageInfo);
+
+        executor = Executors.newSingleThreadExecutor();
+        executor.execute(() -> {
+            pageIndexer.executePageIndexing(absHref, site);
+            latch.countDown();
+        });
+
+        getWaitingThread().start();
+        response.setResult(true);
+        return response;
+    }
+
+    private void executeSiteParsing (SiteDto siteDto) {
+        Optional<Site> siteOptional = siteRepository.findByUrl(siteDto.getUrl());
+        siteOptional.ifPresent(site -> {
+            List<Lemma> lemmasToDelete = lemmaRepository.findBySite(site);
+            siteRepository.delete(site);
+            lemmaRepository.deleteAll(lemmasToDelete);
+        });
+        Site indexingSite = saveSiteEntity(siteDto, IndexingStatus.INDEXING);
+
+        WebParserTask task = new WebParserTask(
+                indexingSite, indexingSite.getUrl(),
+                siteRepository, pageRepository,
+                new AtomicBoolean(true), pageIndexer
+        );
         forkJoinPool.invoke(task);
 
         if (task.getIsIndexed().get()) {
@@ -113,18 +172,41 @@ public class IndexingServiceImpl implements IndexingService {
             indexingSite.setStatusTime(LocalDateTime.now());
             siteRepository.save(indexingSite);
         }
-
-        latch.countDown();
     }
 
-    private Site getSiteEntity (SiteDto siteDto) {
+    private Thread getWaitingThread () {
+        return new Thread(() -> {
+            try {
+                latch.await();
+            } catch (InterruptedException e) {
+                System.err.println(e.getMessage());
+            }
+            System.out.println("Индексация завершена");
+            executor.shutdown();
+        });
+    }
+
+    private Site saveSiteEntity (SiteDto siteDto, IndexingStatus status) {
         Site site = new Site();
-        site.setIndexingStatus(IndexingStatus.INDEXING);
+        site.setIndexingStatus(status);
         site.setStatusTime(LocalDateTime.now());
         site.setUrl(siteDto.getUrl());
         site.setName(siteDto.getName());
         siteRepository.save(site);
         return site;
+    }
+
+    private void clearPageInfo (Page page) {
+        List<Lemma> lemmasToDelete = page.getIndexSet().stream().map(Index::getLemma).toList();
+        pageRepository.delete(page);
+        lemmasToDelete.forEach(lemma -> {
+            if (lemma.getFrequency() == 1) {
+                lemmaRepository.delete(lemma);
+            } else {
+                lemma.setFrequency(lemma.getFrequency() - 1);
+                lemmaRepository.save(lemma);
+            }
+        });
     }
 
     private boolean isIndexing (List<Site> sites) {

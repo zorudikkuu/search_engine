@@ -37,12 +37,9 @@ public class Site {
     @Column(name = "name", nullable = false, columnDefinition = "VARCHAR(255)")
     private String name;
 
-    @OneToMany(mappedBy = "site", targetEntity = Page.class, fetch = FetchType.EAGER, cascade = CascadeType.ALL)
+    @OneToMany(mappedBy = "site", targetEntity = Page.class, cascade = CascadeType.ALL)
     private Set<Page> pageSet;
 
-    public void addPage (Page page) {
-        this.pageSet.add(page);
-    }
-
-
+    @OneToMany(mappedBy = "site", targetEntity = Lemma.class, cascade = CascadeType.ALL)
+    private Set<Lemma> lemmaSet;
 }

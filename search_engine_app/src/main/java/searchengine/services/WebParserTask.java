@@ -1,13 +1,12 @@
 package searchengine.services;
 
 import lombok.Getter;
+
 import org.jsoup.Connection;
 import org.jsoup.Jsoup;
-
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
-import searchengine.config.WebConnection;
 import searchengine.model.IndexingStatus;
 import searchengine.model.entities.Page;
 import searchengine.model.entities.Site;
@@ -23,32 +22,29 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 public class WebParserTask extends RecursiveAction {
 
-    private static WebConnection connectionAssets;
     private final Site site;
     private final String rootLink;
     private final SiteRepository siteRepository;
     private final PageRepository pageRepository;
+    private final PageIndexer pageIndexer;
     @Getter
     private AtomicBoolean isIndexed;
     private final List<WebParserTask> taskList = new ArrayList<>();
-    private static final List<String> invalidExtensions = Arrays.asList(".png", ".svg", "jpg", "jpeg", ".gif", ".pdf", ".doc", ".docx", ".xlsx", ".eps", ".zip");
+    @Getter
+    private static final String[] invalidExtensions = new String[]{".png", ".svg", "jpg", "jpeg", ".gif", ".pdf", ".doc", ".docx", ".xlsx", ".eps", ".zip", ".yaml", ".yml", ".sql"};
 
-    public WebParserTask (Site site, String rootLink, SiteRepository siteRepository, PageRepository pageRepository, AtomicBoolean isIndexed, WebConnection webConnection) {
+
+    public WebParserTask (Site site, String rootLink,
+                          SiteRepository siteRepository, PageRepository pageRepository,
+                          AtomicBoolean isIndexed, PageIndexer pageIndexer) {
         this.site = site;
         this.rootLink = rootLink;
         this.siteRepository = siteRepository;
         this.pageRepository = pageRepository;
         this.isIndexed = isIndexed;
-        connectionAssets = webConnection;
+        this.pageIndexer = pageIndexer;
     }
 
-    public WebParserTask (Site site, String rootLink, SiteRepository siteRepository, PageRepository pageRepository, AtomicBoolean isIndexed) {
-        this.site = site;
-        this.siteRepository = siteRepository;
-        this.pageRepository = pageRepository;
-        this.isIndexed = isIndexed;
-        this.rootLink = rootLink;
-    }
 
     @Override
     protected void compute() {
@@ -60,12 +56,10 @@ public class WebParserTask extends RecursiveAction {
         }
 
         Document document;
-        Connection.Response response;
         try {
-            response = getResponse(rootLink);
-            document = getDocument(rootLink);
+            document = PageIndexer.getDocument(rootLink);
         } catch (IOException e) {
-            failedIndexingResponse(e.getMessage() + " --> Ошибка при подключении к странице. (" + rootLink + ")");
+            failedIndexingResponse(e.getMessage() + "Не удалось подключиться к странице: " + rootLink);
             return;
         }
 
@@ -77,9 +71,16 @@ public class WebParserTask extends RecursiveAction {
             siteRepository.save(site);
 
             if (linkIsValid(href, absHref)) {
-                Page pageEntity = getPage(href, response.statusCode(), document.html());
-                pageRepository.save(pageEntity);
-                WebParserTask task = new WebParserTask(site, absHref.replace("www.", ""), siteRepository, pageRepository, isIndexed);
+                boolean isComplete = pageIndexer.executePageIndexing(absHref, site);
+                if (!isComplete) {
+                    failedIndexingResponse("Не удалось подключиться к странице: " + absHref);
+                    return;
+                }
+
+                WebParserTask task = new WebParserTask(
+                        site, absHref.replace("www.", ""),
+                        siteRepository, pageRepository, isIndexed, pageIndexer
+                );
                 taskList.add(task);
             }
         }
@@ -93,38 +94,10 @@ public class WebParserTask extends RecursiveAction {
     }
 
     private boolean linkIsValid (String href, String absHref) {
-        boolean hasValidExtension = invalidExtensions.stream().noneMatch(extension -> href.toLowerCase().endsWith(extension));
+        boolean hasValidExtension = Arrays.stream(invalidExtensions).noneMatch(extension -> href.toLowerCase().endsWith(extension));
         boolean isUnique = pageRepository.findByPath(href).isEmpty();
-        //boolean notRequest = !absHref.contains("&") && !absHref.contains("?") && !absHref.contains("%");
 
         return hasValidExtension && isUnique && absHref.startsWith(site.getUrl()) && !absHref.contains("#");
-    }
-
-    private Connection.Response getResponse (String link) throws IOException {
-        return Jsoup
-                .connect(link)
-                .timeout(connectionAssets.getTimeout())
-                .userAgent(connectionAssets.getAgent())
-                .referrer(connectionAssets.getReferrer())
-                .execute();
-    }
-
-    private Document getDocument (String link) throws IOException {
-        return Jsoup
-                .connect(link)
-                .timeout(connectionAssets.getTimeout())
-                .userAgent(connectionAssets.getAgent())
-                .referrer(connectionAssets.getReferrer())
-                .get();
-    }
-
-    private Page getPage (String link, int responseCode, String content) {
-        Page page = new Page();
-        page.setSite(site);
-        page.setCode(responseCode);
-        page.setPath(link);
-        page.setContent(content);
-        return page;
     }
 
     private void failedIndexingResponse (String errorMessage) {
