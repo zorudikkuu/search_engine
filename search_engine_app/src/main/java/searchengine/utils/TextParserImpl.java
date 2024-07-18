@@ -1,20 +1,24 @@
-package searchengine.services;
+package searchengine.utils;
 
 import org.apache.lucene.morphology.LuceneMorphology;
+import org.apache.lucene.morphology.english.EnglishLuceneMorphology;
 import org.apache.lucene.morphology.russian.RussianLuceneMorphology;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
+
 @Component
 public class TextParserImpl implements TextParser {
     private LuceneMorphology russianMorphology = null;
-    private final static String[] particles = new String[]{"МЕЖД", "ПРЕДЛ", "СОЮЗ", "ЧАСТ"};
+    private LuceneMorphology englishMorfology = null;
+    private final static String[] russianParticles = new String[]{"МЕЖД", "ПРЕДЛ", "СОЮЗ", "ЧАСТ"};
+    private final static String[] englishParticles = new String[]{"PREP", "CONJ", "PART", "INT", "ARTICLE"};
     public TextParserImpl () {
         try {
             this.russianMorphology = new RussianLuceneMorphology();
+            this.englishMorfology = new EnglishLuceneMorphology();
         } catch (IOException e) {
             System.out.println(e.getMessage());
         }
@@ -26,18 +30,20 @@ public class TextParserImpl implements TextParser {
         if (text.isEmpty()) {
             return new HashMap<>();
         }
-        String regex = "[^А-Яа-я]";
-        String clearedText = replaceHtml(text)
-                .replaceAll(regex, " ")
-                .toLowerCase()
-                .trim();
-        String[] words = clearedText.split("\\s+");
 
+        String[] russianWords = getRussianWords(text);
+
+        HashMap<String, Integer> russianLemmas = getLemmaMap(russianWords);
+
+        return russianLemmas;
+    }
+
+    private HashMap<String, Integer> getLemmaMap (String[] words) {
         HashMap<String, Integer> lemmas = new HashMap<>();
         for (String word : words) {
             List<String> wordFormsInfo = russianMorphology.getMorphInfo(word);
 
-            if (!wordFormsInfo.stream().allMatch(TextParserImpl::isIndependent) || word.isBlank()) {
+            if (!wordFormsInfo.stream().allMatch(info -> isIndependent(info) || word.isBlank())) {
                 continue;
             }
 
@@ -57,6 +63,10 @@ public class TextParserImpl implements TextParser {
         return lemmas;
     }
 
+    public String getLemma (String word) {
+        return russianMorphology.getNormalForms(word).get(0);
+    }
+
     @Override
     public String replaceHtml(String text) {
         String startTag = "<script";
@@ -74,8 +84,26 @@ public class TextParserImpl implements TextParser {
         return text.replaceAll("<(.|\n)*?>", " ");
     }
 
+    private String[] getRussianWords (String text) {
+        String regexRussian = "[^А-Яа-я]";
+        String clearedText = replaceHtml(text)
+                .replaceAll(regexRussian, " ")
+                .toLowerCase()
+                .trim();
+        return clearedText.split("\\s+");
+    }
+
+    private String[] getEnglishWords (String text) {
+        String regexEnglish = "[^A-Za-z]";
+        String clearedText = replaceHtml(text)
+                .replaceAll(regexEnglish, " ")
+                .toLowerCase()
+                .trim();
+        return clearedText.split("\\s+");
+    }
+
     private static boolean isIndependent(String wordInfo) {
-        for (String particle : particles) {
+        for (String particle : russianParticles) {
             if (wordInfo.toUpperCase().contains(particle)) {
                 return false;
             }

@@ -5,8 +5,10 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import searchengine.dto.responses.IndexingResponse;
 import searchengine.dto.responses.StatisticsResponse;
+import searchengine.dto.responses.SuccessfulSearchResponse;
 import searchengine.services.IndexingService;
 import searchengine.services.StatisticsService;
+
 
 @RestController
 @RequestMapping("/api")
@@ -38,5 +40,15 @@ public class ApiController {
     @PostMapping("/indexPage")
     public ResponseEntity<IndexingResponse> indexPage(@RequestBody String url) {
         return ResponseEntity.ok(indexingService.indexPage(url));
+    }
+
+    @GetMapping("/search")
+    public ResponseEntity<SuccessfulSearchResponse> search(
+            @RequestParam String query,
+            @RequestParam(required = false) String site,
+            @RequestParam(required = false) int offset,
+            @RequestParam(required = false) int limit
+            ) {
+        return ResponseEntity.ok(indexingService.search(query, site, offset, limit));
     }
 }

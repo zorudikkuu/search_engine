@@ -1,14 +1,11 @@
-package searchengine.services;
+package searchengine.utils;
 
 import lombok.Getter;
 
-import org.jsoup.Connection;
-import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 import searchengine.model.IndexingStatus;
-import searchengine.model.entities.Page;
 import searchengine.model.entities.Site;
 import searchengine.model.repositories.PageRepository;
 import searchengine.model.repositories.SiteRepository;

@@ -10,7 +10,7 @@ import java.util.Set;
 @Table(name = "lemma")
 @Getter
 @Setter
-public class Lemma {
+public class Lemma implements Comparable<Lemma> {
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Integer id;
@@ -27,4 +27,9 @@ public class Lemma {
 
     @OneToMany(mappedBy = "lemma", targetEntity = Index.class, cascade = CascadeType.ALL)
     private Set<Index> indexSet;
+
+    @Override
+    public int compareTo(Lemma o) {
+        return this.getFrequency() - o.getFrequency();
+    }
 }

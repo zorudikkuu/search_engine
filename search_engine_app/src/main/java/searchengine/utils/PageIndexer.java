@@ -1,10 +1,10 @@
-package searchengine.services;
+package searchengine.utils;
 
-import lombok.extern.log4j.Log4j2;
 import org.jsoup.Connection;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.annotation.Transactional;
 import searchengine.config.WebConnection;
 import searchengine.model.entities.Index;
 import searchengine.model.entities.Lemma;
@@ -33,6 +33,8 @@ public class PageIndexer {
         this.indexRepository = indexRepository;
         PageIndexer.webConnection = webConnection;
     }
+
+    @Transactional
     public boolean executePageIndexing (String link, Site site) {
         Page page = getPageEntity(link, site);
         if (page == null) {
@@ -41,14 +43,30 @@ public class PageIndexer {
 
         pageRepository.save(page);
         HashMap<String, Integer> lemmas = new HashMap<>(textParser.getLemmas(page.getContent()));
+        Set<Lemma> lemmaSet = new HashSet<>();
+        Set<Index> indexSet = new HashSet<>();
         for (Map.Entry<String, Integer> lemmaToCount : lemmas.entrySet()) {
             Lemma lemma = getLemmaEntity(lemmaToCount.getKey(), site);
             Index index = getIndexEntity(page, lemma, lemmaToCount.getValue());
-            lemmaRepository.save(lemma);
-            indexRepository.save(index);
-
+            lemmaSet.add(lemma);
+            indexSet.add(index);
         }
+        if (!lemmaSet.isEmpty()) {
+            lemmaRepository.saveAll(lemmaSet);
+            indexRepository.saveAll(indexSet);
+        }
+
         return true;
+    }
+
+    public String getPageTitle (String link) {
+        Document document;
+        try {
+            document = getDocument(link);
+        } catch (IOException e) {
+            return "";
+        }
+        return document.title();
     }
 
     private Page getPageEntity (String link, Site site) {
@@ -71,8 +89,9 @@ public class PageIndexer {
     }
 
     private Lemma getLemmaEntity (String lemma, Site site) {
-        if (lemmaRepository.findByLemmaAndSite(lemma, site).isPresent()) {
-            Lemma presentLemma = lemmaRepository.findByLemmaAndSite(lemma, site).get();
+        Optional<Lemma> optionalLemma = lemmaRepository.findByLemmaAndSite(lemma, site);
+        if (optionalLemma.isPresent()) {
+            Lemma presentLemma = optionalLemma.get();
             presentLemma.setFrequency(presentLemma.getFrequency() + 1);
             return presentLemma;
         } else {
