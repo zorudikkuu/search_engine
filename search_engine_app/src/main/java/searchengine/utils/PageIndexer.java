@@ -1,5 +1,6 @@
 package searchengine.utils;
 
+import lombok.extern.log4j.Log4j2;
 import org.jsoup.Connection;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
@@ -17,6 +18,7 @@ import searchengine.model.repositories.PageRepository;
 import java.io.IOException;
 import java.util.*;
 
+@Log4j2
 @Component
 public class PageIndexer {
     private final TextParser textParser;
@@ -42,6 +44,7 @@ public class PageIndexer {
         }
 
         pageRepository.save(page);
+        log.info("Страница сохранена в БД");
         HashMap<String, Integer> lemmas = new HashMap<>(textParser.getLemmas(page.getContent()));
         Set<Lemma> lemmaSet = new HashSet<>();
         Set<Index> indexSet = new HashSet<>();
@@ -51,10 +54,9 @@ public class PageIndexer {
             lemmaSet.add(lemma);
             indexSet.add(index);
         }
-        if (!lemmaSet.isEmpty()) {
-            lemmaRepository.saveAll(lemmaSet);
-            indexRepository.saveAll(indexSet);
-        }
+        lemmaRepository.saveAll(lemmaSet);
+        indexRepository.saveAll(indexSet);
+        log.info("Леммы и индексы сохранены в БД");
 
         return true;
     }
@@ -75,6 +77,7 @@ public class PageIndexer {
         try {
             connectionResponse = getResponse(link);
             if (connectionResponse.statusCode() >= 400) {
+                log.error("Страница недоступна.");
                 return null;
             }
             page.setSite(site);
@@ -82,7 +85,7 @@ public class PageIndexer {
             page.setCode(connectionResponse.statusCode());
             page.setContent(connectionResponse.body());
         } catch (IOException e) {
-            System.out.println(e.getMessage() + " Страница не найдена");
+            log.error(e.getMessage() + "  Страница не найдена.");
             return null;
         }
         return page;
@@ -90,15 +93,18 @@ public class PageIndexer {
 
     private Lemma getLemmaEntity (String lemma, Site site) {
         Optional<Lemma> optionalLemma = lemmaRepository.findByLemmaAndSite(lemma, site);
+        log.info("Лемма ищется в БД");
         if (optionalLemma.isPresent()) {
             Lemma presentLemma = optionalLemma.get();
             presentLemma.setFrequency(presentLemma.getFrequency() + 1);
+            log.info("Лемма найдена");
             return presentLemma;
         } else {
             Lemma lemmaEntity = new Lemma();
             lemmaEntity.setSite(site);
             lemmaEntity.setLemma(lemma);
             lemmaEntity.setFrequency(1);
+            log.info("Лемма не найдена - формируется новая");
             return lemmaEntity;
         }
     }
@@ -108,6 +114,7 @@ public class PageIndexer {
         index.setPage(page);
         index.setLemma(lemma);
         index.setRank(rank);
+        log.info("Сформирован индекс");
         return index;
     }
 

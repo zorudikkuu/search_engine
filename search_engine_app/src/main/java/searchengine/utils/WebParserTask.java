@@ -2,6 +2,7 @@ package searchengine.utils;
 
 import lombok.Getter;
 
+import lombok.extern.log4j.Log4j2;
 import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
@@ -17,6 +18,7 @@ import java.util.*;
 import java.util.concurrent.RecursiveAction;
 import java.util.concurrent.atomic.AtomicBoolean;
 
+@Log4j2
 public class WebParserTask extends RecursiveAction {
 
     private final Site site;
@@ -49,6 +51,7 @@ public class WebParserTask extends RecursiveAction {
             Thread.sleep(1000);
         } catch (InterruptedException e) {
             failedIndexingResponse(e.getMessage() + " Индексация прервана, попробуйте еще раз.");
+            log.error(e.getMessage() + " Индексация прервана, попробуйте еще раз.");
             return;
         }
 
@@ -67,19 +70,24 @@ public class WebParserTask extends RecursiveAction {
             site.setStatusTime(LocalDateTime.now());
             siteRepository.save(site);
 
-            if (linkIsValid(href, absHref)) {
-                boolean isComplete = pageIndexer.executePageIndexing(absHref, site);
-                if (!isComplete) {
-                    failedIndexingResponse("Не удалось подключиться к странице: " + absHref);
-                    return;
-                }
-
-                WebParserTask task = new WebParserTask(
-                        site, absHref.replace("www.", ""),
-                        siteRepository, pageRepository, isIndexed, pageIndexer
-                );
-                taskList.add(task);
+            if (!linkIsValid(href, absHref)) {
+                log.info("Ссылка не прошла проверку - " + absHref);
+                continue;
             }
+
+            log.info("Ссылка прошла проверку");
+            boolean isComplete = pageIndexer.executePageIndexing(absHref, site);
+            if (!isComplete) {
+                failedIndexingResponse("Не удалось подключиться к странице: " + absHref);
+                log.error("Не удалось подключиться к странице: " + absHref);
+                return;
+            }
+
+            WebParserTask task = new WebParserTask(
+                    site, absHref.replace("www.", ""),
+                    siteRepository, pageRepository, isIndexed, pageIndexer
+            );
+            taskList.add(task);
         }
 
         for (WebParserTask task : taskList) {
@@ -94,6 +102,7 @@ public class WebParserTask extends RecursiveAction {
         boolean hasValidExtension = Arrays.stream(invalidExtensions).noneMatch(extension -> href.toLowerCase().endsWith(extension));
         boolean isUnique = pageRepository.findByPath(href).isEmpty();
 
+        log.info("Ссылка на страницу проверяется на валидность");
         return hasValidExtension && isUnique && absHref.startsWith(site.getUrl()) && !absHref.contains("#");
     }
 

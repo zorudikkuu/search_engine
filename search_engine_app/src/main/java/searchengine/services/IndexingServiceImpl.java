@@ -1,5 +1,6 @@
 package searchengine.services;
 
+import lombok.extern.log4j.Log4j2;
 import org.springframework.stereotype.Service;
 import searchengine.config.SiteDto;
 import searchengine.config.SitesList;
@@ -30,6 +31,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
+@Log4j2
 @Service
 public class IndexingServiceImpl implements IndexingService {
     private final SitesList sitesList;
@@ -94,13 +96,13 @@ public class IndexingServiceImpl implements IndexingService {
         forkJoinPool.shutdownNow();
         try {
             if (forkJoinPool.awaitTermination(30, TimeUnit.SECONDS)) {
-                System.out.println("fjp terminated");
+                log.info("ForkJoinPool terminated");
             }
         } catch (InterruptedException e) {
-            System.err.println(e.getMessage() + " (Termination failed)");
+            log.error("Termination failed");
         }
         executor.shutdownNow();
-        System.out.println("Индексация прервана");
+        log.info("Индексация прервана");
 
         siteRepository
                 .findAll()
@@ -216,6 +218,7 @@ public class IndexingServiceImpl implements IndexingService {
             Set<Lemma> lemmasToDelete = site.getLemmaSet();
             siteRepository.delete(site);
             lemmaRepository.deleteAll(lemmasToDelete);
+            log.info("Сайт и его леммы удалены из БД");
         });
         Site indexingSite = saveSiteEntity(siteDto, IndexingStatus.INDEXING);
 
@@ -230,6 +233,7 @@ public class IndexingServiceImpl implements IndexingService {
             indexingSite.setIndexingStatus(IndexingStatus.INDEXED);
             indexingSite.setStatusTime(LocalDateTime.now());
             siteRepository.save(indexingSite);
+            log.info("Сайт успешно проиндексирован");
         }
     }
 
@@ -240,7 +244,7 @@ public class IndexingServiceImpl implements IndexingService {
             } catch (InterruptedException e) {
                 System.err.println(e.getMessage());
             }
-            System.out.println("Индексация завершена");
+            log.info("Индексация завершена");
             executor.shutdown();
         });
     }
@@ -263,7 +267,7 @@ public class IndexingServiceImpl implements IndexingService {
             textParts.add(text.substring(endIndex - 300));
         }
 
-        String snippet = "";
+        StringBuilder snippet = new StringBuilder();
         long maxCount = 0L;
         for (String part : textParts) {
             long keyCount = 0L;
@@ -288,18 +292,19 @@ public class IndexingServiceImpl implements IndexingService {
             }
             if (keyCount > maxCount) {
                 maxCount = keyCount;
-                snippet = part;
+                snippet = new StringBuilder(part);
             }
         }
+        snippet = new StringBuilder().append("...").append(snippet).append("...");
 
-        return "..." + snippet + "...";
+        return snippet.toString();
     }
 
     private HashMap<Page, Double> calculateRelevance (List<Page> pages, Set<Lemma> keyWords) {
         HashMap<Page, Double> pageToAbsoluteRelevance = new HashMap<>();
         HashMap<Page, Double> pageToRelevance = new HashMap<>();
-        List<Integer> absoluteRelevanceList = new ArrayList<>();
-        int maxAbsoluteRelevance = 0;
+        List<Double> absoluteRelevanceList = new ArrayList<>();
+        Double maxAbsoluteRelevance = 0.0;
         for (Page page : pages) {
             List<Index> indexes = new ArrayList<>();
             for (Lemma lemma : keyWords) {
@@ -308,18 +313,16 @@ public class IndexingServiceImpl implements IndexingService {
             }
 
             List<Float> ranks = indexes.stream().map(Index::getRank).toList();
-            int absoluteRelevance = 0;
+            double absoluteRelevance = 0;
             for (Float rank : ranks) {
                 absoluteRelevance += rank;
             }
             absoluteRelevanceList.add(absoluteRelevance);
-            pageToAbsoluteRelevance.put(page, (double) absoluteRelevance);
+            pageToAbsoluteRelevance.put(page, absoluteRelevance);
         }
 
-        for (Integer absoluteRelevance : absoluteRelevanceList) {
-            if (absoluteRelevance > maxAbsoluteRelevance) {
-                maxAbsoluteRelevance = absoluteRelevance;
-            }
+        for (Double absoluteRelevance : absoluteRelevanceList) {
+            maxAbsoluteRelevance = Double.max(absoluteRelevance, maxAbsoluteRelevance);
         }
 
         for (Map.Entry<Page, Double> pair : pageToAbsoluteRelevance.entrySet()) {
@@ -331,7 +334,7 @@ public class IndexingServiceImpl implements IndexingService {
         return pageToRelevance;
     }
 
-    private List<Page> findPagesByQuery (TreeSet<Lemma> keyWords) {
+    private List<Page> findPagesByQuery (Set<Lemma> keyWords) {
         if (keyWords.isEmpty()) {
             return new ArrayList<>();
         }
@@ -341,7 +344,8 @@ public class IndexingServiceImpl implements IndexingService {
                 .map(Lemma::getSite)
                 .distinct().toList();
 
-        TreeSet<Lemma> allKeyWords = keyWords;
+        keyWords = new TreeSet<>(keyWords);
+        TreeSet<Lemma> allKeyWords = (TreeSet<Lemma>) keyWords;
         List<Page> foundPages = new ArrayList<>();
         for (Site site : sites) {
             keyWords = allKeyWords
@@ -355,16 +359,12 @@ public class IndexingServiceImpl implements IndexingService {
             List<Page> foundPagesForSite = findPagesByLemma(rarestWord);
             for (Lemma lemma : keyWords) {
                 List<Page> pagesWithLemma = findPagesByLemma(lemma);
-                Iterator<Page> iterator = foundPagesForSite.iterator();
-                while (iterator.hasNext()) {
-                    Page page = iterator.next();
-                    boolean isContainsPage = pagesWithLemma
-                            .stream()
-                            .anyMatch(pageWithLemma -> Objects.equals(pageWithLemma, page));
-                    if (!isContainsPage) {
-                        iterator.remove();
-                    }
-                }
+                foundPagesForSite = foundPagesForSite
+                        .stream()
+                        .filter(page -> pagesWithLemma
+                                .stream()
+                                .anyMatch(pageWithLemma -> Objects.equals(pageWithLemma, page)))
+                        .toList();
             }
             foundPages.addAll(foundPagesForSite);
         }
@@ -419,6 +419,7 @@ public class IndexingServiceImpl implements IndexingService {
         site.setUrl(siteDto.getUrl());
         site.setName(siteDto.getName());
         siteRepository.save(site);
+        log.info("Сайт сохранен в БД");
         return site;
     }
 

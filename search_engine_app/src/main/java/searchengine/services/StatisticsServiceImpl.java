@@ -67,7 +67,7 @@ public class StatisticsServiceImpl implements StatisticsService {
         detailedItem.setUrl(site.getUrl());
         detailedItem.setName(site.getName());
         detailedItem.setStatus(String.valueOf(site.getIndexingStatus()));
-        detailedItem.setStatusTime(site.getStatusTime().getDayOfYear());
+        detailedItem.setStatusTime(site.getStatusTime().getSecond());
         detailedItem.setError(site.getLastError() == null ? "" : site.getLastError());
         detailedItem.setPages(site.getPageSet().size());
         detailedItem.setLemmas(site.getLemmaSet().size());
