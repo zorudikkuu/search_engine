@@ -69,19 +69,24 @@ public class TextParserImpl implements TextParser {
 
     @Override
     public String replaceHtml(String text) {
-        String startTag = "<script";
-        String endTag = "</script>";
+        text = removeTagContent("script", text);
+        text = removeTagContent("style", text);
+
+        return text.replaceAll("<(.|\n)*?>", " ");
+    }
+
+    private String removeTagContent (String tag, String text) {
+        String startTag = "<" + tag;
+        String endTag = "</" + tag + ">";
 
         while (text.contains(startTag)) {
             int startIndex = text.lastIndexOf(startTag);
             int endIndex = text.indexOf(endTag,startIndex);
 
-            String script = text.substring(startIndex,endIndex + endTag.length());
-            text = text.replace(script," ");
+            String content = text.substring(startIndex,endIndex + endTag.length());
+            text = text.replace(content," ");
         }
-
-
-        return text.replaceAll("<(.|\n)*?>", " ");
+        return text;
     }
 
     private String[] getRussianWords (String text) {

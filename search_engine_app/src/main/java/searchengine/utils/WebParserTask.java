@@ -93,9 +93,6 @@ public class WebParserTask extends RecursiveAction {
         for (WebParserTask task : taskList) {
             task.fork();
         }
-        for (WebParserTask task : taskList) {
-            task.join();
-        }
     }
 
     private boolean linkIsValid (String href, String absHref) {

@@ -40,7 +40,6 @@ public class IndexingServiceImpl implements IndexingService {
     private final PageRepository pageRepository;
     private final LemmaRepository lemmaRepository;
     private final IndexRepository indexRepository;
-    private CountDownLatch latch;
     private final ForkJoinPool forkJoinPool = new ForkJoinPool();
     private final PageIndexer pageIndexer;
     private final TextParser textParser;
@@ -58,6 +57,12 @@ public class IndexingServiceImpl implements IndexingService {
         this.textParser = textParser;
     }
 
+    //TODO: -----> taskList                       | priority | level | status
+    // 1) реализовать обработку английских слов   |     3    |   2   |
+    // 2) провести рефакторинг                    |     1    |   1   | IN PROGRESS
+    // 3) пофиксить выдачу результатов по 1 сайту |     2    |   2   | DONE
+
+
     @Override
     public IndexingResponse startIndexing() {
         IndexingResponse response = new IndexingResponse();
@@ -69,16 +74,10 @@ public class IndexingServiceImpl implements IndexingService {
 
         List<SiteDto> sites = sitesList.getSites();
         executor = Executors.newFixedThreadPool(sitesList.getSites().size());
-        latch = new CountDownLatch(sitesList.getSites().size());
 
         for (SiteDto siteDto : sites) {
-            executor.submit(() -> {
-                executeSiteParsing(siteDto);
-                latch.countDown();
-            });
+            executor.submit(() -> executeSiteParsing(siteDto));
         }
-
-        getWaitingThread().start();
 
         response.setResult(true);
         return response;
@@ -104,16 +103,7 @@ public class IndexingServiceImpl implements IndexingService {
         executor.shutdownNow();
         log.info("Индексация прервана");
 
-        siteRepository
-                .findAll()
-                .stream()
-                .filter(site -> site.getIndexingStatus().equals(IndexingStatus.INDEXING))
-                .forEach(site -> {
-                    site.setIndexingStatus(IndexingStatus.FAILED);
-                    site.setLastError("Индексация остановлена пользователем");
-                    site.setStatusTime(LocalDateTime.now());
-                    siteRepository.save(site);
-                });
+        updateStoppedSites();
         response.setResult(true);
         return response;
     }
@@ -121,30 +111,20 @@ public class IndexingServiceImpl implements IndexingService {
     @Override
     public IndexingResponse indexPage(String url) {
         IndexingResponse response = new IndexingResponse();
-        latch = new CountDownLatch(1);
 
         String decodedUrl = URLDecoder.decode(url, StandardCharsets.UTF_8);
         String absHref = decodedUrl.substring(decodedUrl.indexOf("=") + 1);
         int endDomainIndex = absHref.indexOf("/", absHref.indexOf("//") + 2);
         String domain = absHref.substring(0, endDomainIndex + 1);
 
-        List<SiteDto> siteList = sitesList.getSites();
-        SiteDto siteByUrl = null;
-        for (SiteDto siteDto : siteList) {
-            if (siteDto.getUrl().equals(domain)) {
-                siteByUrl = siteDto;
-            }
-        }
-
         Site site;
-        if (siteByUrl != null) {
-            Optional<Site> optionalSite = siteRepository.findByUrl(domain);
-            site = optionalSite.isPresent() ? optionalSite.get() : saveSiteEntity(siteByUrl, IndexingStatus.INDEXED);
-            siteRepository.save(site);
-        } else {
+        try {
+            site = findSiteInConfiguration(domain);
+        } catch (NullPointerException e) {
             response.setResult(false);
-            response.setError("Данная страница находится за пределами сайтов, " +
-                    "указанных в конфигурационном файле");
+            response.setError("Данная страница находится за " +
+                              "пределами сайтов, указанных в " +
+                              "конфигурационном файле");
             return response;
         }
 
@@ -154,10 +134,7 @@ public class IndexingServiceImpl implements IndexingService {
         executor = Executors.newSingleThreadExecutor();
         executor.execute(() -> {
             pageIndexer.executePageIndexing(absHref, site);
-            latch.countDown();
         });
-
-        getWaitingThread().start();
         response.setResult(true);
         return response;
     }
@@ -173,7 +150,6 @@ public class IndexingServiceImpl implements IndexingService {
                 .orElseGet(() -> getQueryKeyWords(queryLemmas));
 
         List<Page> foundPages = findPagesByQuery(keyWords);
-
         if (foundPages.isEmpty()) {
             response.setResult(true);
             response.setCount(0);
@@ -181,30 +157,14 @@ public class IndexingServiceImpl implements IndexingService {
         }
 
         HashMap<Page, Double> pageToRelevance = calculateRelevance(foundPages, keyWords);
-        Set<SearchData> dataSet = new HashSet<>();
+        Set<SearchData> dataSet = new TreeSet<>(Comparator.comparing(SearchData::getRelevance));
 
         for (Map.Entry<Page, Double> pair : pageToRelevance.entrySet()) {
-            SearchData dataEntity = new SearchData();
-            String siteLink = pair.getKey().getSite().getUrl().replaceAll("/$", "");
-            dataEntity.setSite(siteLink);
-            dataEntity.setSiteName(pair.getKey().getSite().getName());
-            String pagePath = pair.getKey().getPath();
-            dataEntity.setUri(pagePath);
-            String absHref = siteLink + pagePath;
-            dataEntity.setTitle(pageIndexer.getPageTitle(absHref));
-            dataEntity.setSnippet(getSnippet(pair.getKey().getContent(), keyWords));
+            String snippet = getSnippet(pair.getKey().getContent(), keyWords);
+            SearchData dataEntity = getPageData(pair.getKey(), pair.getValue(), snippet);
             dataSet.add(dataEntity);
-
         }
         Set<SearchData> dataPart = dataSet.stream().skip(offset).limit(limit).collect(Collectors.toSet());
-
-        //TODO: -----> taskList                       | priority | level | status
-        // 1) реализовать генерацию сниппета          |     6    |   2   | DONE
-        // 2) разобраться с параметрами limit и offset|     5    |   1   | DONE
-        // 3) оптимизировать индексацию               |     4    |   4   |
-        // 4) реализовать обработку английских слов   |     3    |   2   |
-        // 5) провести рефакторинг                    |     2    |   1   |
-        // 6) написать документацию и тесты           |     1    |   3   |
 
         response.setResult(true);
         response.setCount(dataSet.size());
@@ -215,10 +175,8 @@ public class IndexingServiceImpl implements IndexingService {
     private void executeSiteParsing (SiteDto siteDto) {
         Optional<Site> siteOptional = siteRepository.findByUrl(siteDto.getUrl());
         siteOptional.ifPresent(site -> {
-            Set<Lemma> lemmasToDelete = site.getLemmaSet();
             siteRepository.delete(site);
-            lemmaRepository.deleteAll(lemmasToDelete);
-            log.info("Сайт и его леммы удалены из БД");
+            log.info("Сайт удален из БД");
         });
         Site indexingSite = saveSiteEntity(siteDto, IndexingStatus.INDEXING);
 
@@ -237,16 +195,18 @@ public class IndexingServiceImpl implements IndexingService {
         }
     }
 
-    private Thread getWaitingThread () {
-        return new Thread(() -> {
-            try {
-                latch.await();
-            } catch (InterruptedException e) {
-                System.err.println(e.getMessage());
-            }
-            log.info("Индексация завершена");
-            executor.shutdown();
-        });
+    private SearchData getPageData (Page page, Double relevance, String snippet) {
+        SearchData dataEntity = new SearchData();
+        String siteLink = page.getSite().getUrl().replaceAll("/$", "");
+        dataEntity.setSite(siteLink);
+        dataEntity.setSiteName(page.getSite().getName());
+        String pagePath = page.getPath();
+        dataEntity.setUri(pagePath);
+        String absHref = siteLink + pagePath;
+        dataEntity.setTitle(pageIndexer.getPageTitle(absHref));
+        dataEntity.setSnippet(snippet);
+        dataEntity.setRelevance(relevance);
+        return dataEntity;
     }
 
     private String getSnippet (String content, Set<Lemma> keyWords) {
@@ -305,18 +265,9 @@ public class IndexingServiceImpl implements IndexingService {
         HashMap<Page, Double> pageToRelevance = new HashMap<>();
         List<Double> absoluteRelevanceList = new ArrayList<>();
         Double maxAbsoluteRelevance = 0.0;
-        for (Page page : pages) {
-            List<Index> indexes = new ArrayList<>();
-            for (Lemma lemma : keyWords) {
-                Optional<Index> optionalIndex = indexRepository.findByLemmaAndPage(lemma, page);
-                optionalIndex.ifPresent(indexes::add);
-            }
 
-            List<Float> ranks = indexes.stream().map(Index::getRank).toList();
-            double absoluteRelevance = 0;
-            for (Float rank : ranks) {
-                absoluteRelevance += rank;
-            }
+        for (Page page : pages) {
+            double absoluteRelevance = getAbsoluteRelevance(page, keyWords);
             absoluteRelevanceList.add(absoluteRelevance);
             pageToAbsoluteRelevance.put(page, absoluteRelevance);
         }
@@ -334,6 +285,21 @@ public class IndexingServiceImpl implements IndexingService {
         return pageToRelevance;
     }
 
+    private Double getAbsoluteRelevance (Page page, Set<Lemma> keyWords) {
+        List<Index> indexes = new ArrayList<>();
+        for (Lemma lemma : keyWords) {
+            Optional<Index> optionalIndex = indexRepository.findByLemmaAndPage(lemma, page);
+            optionalIndex.ifPresent(indexes::add);
+        }
+
+        List<Float> ranks = indexes.stream().map(Index::getRank).toList();
+        double absoluteRelevance = 0;
+        for (Float rank : ranks) {
+            absoluteRelevance += rank;
+        }
+        return absoluteRelevance;
+    }
+
     private List<Page> findPagesByQuery (Set<Lemma> keyWords) {
         if (keyWords.isEmpty()) {
             return new ArrayList<>();
@@ -342,7 +308,8 @@ public class IndexingServiceImpl implements IndexingService {
         List<Site> sites = keyWords
                 .stream()
                 .map(Lemma::getSite)
-                .distinct().toList();
+                .distinct()
+                .toList();
 
         keyWords = new TreeSet<>(keyWords);
         TreeSet<Lemma> allKeyWords = (TreeSet<Lemma>) keyWords;
@@ -377,7 +344,8 @@ public class IndexingServiceImpl implements IndexingService {
             Optional<Lemma> optionalLemma = lemmaRepository.findByLemmaAndSite(lemma, site);
             if (optionalLemma.isPresent()) {
                 Lemma lemmaExist = optionalLemma.get();
-                if (lemmaExist.getFrequency() < site.getPageSet().size() * 0.8) {
+                int pageCount = site.getPageSet().size();
+                if (lemmaExist.getFrequency() < pageCount * 0.8 || pageCount < 100) {
                     keyWords.add(lemmaExist);
                 }
             }
@@ -391,7 +359,8 @@ public class IndexingServiceImpl implements IndexingService {
             List<Lemma> lemmaList = lemmaRepository.findByLemma(lemma);
             AtomicInteger totalFrequency = new AtomicInteger();
             lemmaList.forEach(lemma1 -> totalFrequency.set(totalFrequency.get() + lemma1.getFrequency()));
-            if (totalFrequency.get() < pageRepository.findAll().size() * 0.8) {
+            int pageCount = pageRepository.findAll().size();
+            if (totalFrequency.get() < pageCount * 0.8 || pageCount < 100) {
                 keyWords.addAll(lemmaList);
             }
         });
@@ -399,17 +368,45 @@ public class IndexingServiceImpl implements IndexingService {
     }
 
     private List<Page> findPagesByLemma (Lemma lemma) {
-        List<Page> foundPages = new ArrayList<>();
-        List<Lemma> sameLemmas = lemmaRepository.findByLemma(lemma.getLemma());
-        for (Lemma sameLemma : sameLemmas) {
-            List<Page> pages = indexRepository
-                    .findByLemma(sameLemma)
-                    .stream()
-                    .map(Index::getPage)
-                    .toList();
-            foundPages.addAll(pages);
+        return indexRepository
+                .findByLemma(lemma)
+                .stream()
+                .map(Index::getPage)
+                .toList();
+    }
+
+    private Site findSiteInConfiguration (String link) throws NullPointerException {
+        List<SiteDto> siteList = sitesList.getSites();
+        SiteDto siteByUrl = null;
+        for (SiteDto siteDto : siteList) {
+            if (siteDto.getUrl().equals(link)) {
+                siteByUrl = siteDto;
+            }
         }
-        return foundPages;
+
+        Site site;
+        if (siteByUrl != null) {
+            Optional<Site> optionalSite = siteRepository.findByUrl(link);
+            site = optionalSite.isPresent() ? optionalSite.get() : saveSiteEntity(siteByUrl, IndexingStatus.INDEXED);
+            siteRepository.save(site);
+        } else {
+            throw new NullPointerException();
+        }
+
+        return site;
+    }
+
+    private void updateStoppedSites () {
+        siteRepository
+                .findAll()
+                .stream()
+                .filter(site -> site.getIndexingStatus().equals(IndexingStatus.INDEXING))
+                .forEach(site -> {
+                    site.setIndexingStatus(IndexingStatus.FAILED);
+                    site.setLastError("Индексация остановлена пользователем");
+                    site.setStatusTime(LocalDateTime.now());
+                    siteRepository.save(site);
+                });
     }
 
     private Site saveSiteEntity (SiteDto siteDto, IndexingStatus status) {

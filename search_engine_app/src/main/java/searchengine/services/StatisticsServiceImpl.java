@@ -41,14 +41,7 @@ public class StatisticsServiceImpl implements StatisticsService {
             }
             
             Site site = optionalSite.get();
-            if (site.getIndexingStatus().equals(IndexingStatus.INDEXING)) {
-                total.setIndexing(true);
-            }
-            
-            total.setSites(total.getSites() + 1);
-            total.setPages(total.getPages() + site.getPageSet().size());
-            total.setLemmas(total.getLemmas() + site.getLemmaSet().size());
-            
+            updateTotalStatistics(total, site);
             DetailedStatisticsItem detailedItem = getDetailedStatisticItem(site);
             detailed.add(detailedItem);
         }
@@ -72,5 +65,15 @@ public class StatisticsServiceImpl implements StatisticsService {
         detailedItem.setPages(site.getPageSet().size());
         detailedItem.setLemmas(site.getLemmaSet().size());
         return detailedItem;
+    }
+
+    private void updateTotalStatistics (TotalStatistics total, Site site) {
+        if (site.getIndexingStatus().equals(IndexingStatus.INDEXING)) {
+            total.setIndexing(true);
+        }
+
+        total.setSites(total.getSites() + 1);
+        total.setPages(total.getPages() + site.getPageSet().size());
+        total.setLemmas(total.getLemmas() + site.getLemmaSet().size());
     }
 }
