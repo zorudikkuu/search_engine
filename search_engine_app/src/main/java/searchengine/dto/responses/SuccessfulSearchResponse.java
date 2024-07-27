@@ -10,5 +10,5 @@ import java.util.Set;
 public class SuccessfulSearchResponse {
     private boolean result;
     private long count;
-    private Set<SearchData> data;
+    private List<SearchData> data;
 }

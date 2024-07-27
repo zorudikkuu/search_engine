@@ -12,42 +12,53 @@ import java.util.List;
 @Component
 public class TextParserImpl implements TextParser {
     private LuceneMorphology russianMorphology = null;
-    private LuceneMorphology englishMorfology = null;
+    private LuceneMorphology englishMorphology = null;
     private final static String[] russianParticles = new String[]{"МЕЖД", "ПРЕДЛ", "СОЮЗ", "ЧАСТ"};
     private final static String[] englishParticles = new String[]{"PREP", "CONJ", "PART", "INT", "ARTICLE"};
     public TextParserImpl () {
         try {
             this.russianMorphology = new RussianLuceneMorphology();
-            this.englishMorfology = new EnglishLuceneMorphology();
+            this.englishMorphology = new EnglishLuceneMorphology();
         } catch (IOException e) {
             System.out.println(e.getMessage());
         }
     }
 
-    //this method only russian (other code can take english sites)
     @Override
     public HashMap<String, Integer> getLemmas (String text) {
         if (text.isEmpty()) {
             return new HashMap<>();
         }
 
-        String[] russianWords = getRussianWords(text);
+        String[] russianWords = getWords(text, Language.RUSSIAN);
+        String[] englishWords = getWords(text, Language.ENGLISH);
 
-        HashMap<String, Integer> russianLemmas = getLemmaMap(russianWords);
+        HashMap<String, Integer> lemmas = new HashMap<>();
+        lemmas.putAll(getLemmaMap(russianWords, Language.RUSSIAN));
+        lemmas.putAll(getLemmaMap(englishWords, Language.ENGLISH));
 
-        return russianLemmas;
+        return lemmas;
     }
 
-    private HashMap<String, Integer> getLemmaMap (String[] words) {
+    private HashMap<String, Integer> getLemmaMap (String[] words, Language language) {
         HashMap<String, Integer> lemmas = new HashMap<>();
+        LuceneMorphology morphology;
+        if (language == Language.RUSSIAN) {
+            morphology = russianMorphology;
+        } else {
+            morphology = englishMorphology;
+        }
         for (String word : words) {
-            List<String> wordFormsInfo = russianMorphology.getMorphInfo(word);
+            if (word.isBlank()) {
+                continue;
+            }
+            List<String> wordFormsInfo = morphology.getMorphInfo(word);
 
-            if (!wordFormsInfo.stream().allMatch(info -> isIndependent(info) || word.isBlank())) {
+            if (!wordFormsInfo.stream().allMatch(info -> isIndependent(info, language))) {
                 continue;
             }
 
-            List<String> normalForms = russianMorphology.getNormalForms(word);
+            List<String> normalForms = morphology.getNormalForms(word);
             if (normalForms.isEmpty()) {
                 continue;
             }
@@ -63,8 +74,9 @@ public class TextParserImpl implements TextParser {
         return lemmas;
     }
 
-    public String getLemma (String word) {
-        return russianMorphology.getNormalForms(word).get(0);
+    public String getLemma (String word, Language language) {
+        LuceneMorphology morphology = language == Language.RUSSIAN ? russianMorphology : englishMorphology;
+        return morphology.getNormalForms(word).get(0);
     }
 
     @Override
@@ -89,26 +101,18 @@ public class TextParserImpl implements TextParser {
         return text;
     }
 
-    private String[] getRussianWords (String text) {
-        String regexRussian = "[^А-Яа-я]";
+    private String[] getWords (String text, Language language) {
+        String regex = language == Language.RUSSIAN ? "[^А-Яа-я]" : "[^A-Za-z]";
         String clearedText = replaceHtml(text)
-                .replaceAll(regexRussian, " ")
+                .replaceAll(regex, " ")
                 .toLowerCase()
                 .trim();
         return clearedText.split("\\s+");
     }
 
-    private String[] getEnglishWords (String text) {
-        String regexEnglish = "[^A-Za-z]";
-        String clearedText = replaceHtml(text)
-                .replaceAll(regexEnglish, " ")
-                .toLowerCase()
-                .trim();
-        return clearedText.split("\\s+");
-    }
-
-    private static boolean isIndependent(String wordInfo) {
-        for (String particle : russianParticles) {
+    private static boolean isIndependent (String wordInfo, Language language) {
+        String[] particles = language == Language.RUSSIAN ? russianParticles : englishParticles;
+        for (String particle : particles) {
             if (wordInfo.toUpperCase().contains(particle)) {
                 return false;
             }

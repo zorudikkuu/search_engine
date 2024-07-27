@@ -75,7 +75,7 @@ public class WebParserTask extends RecursiveAction {
                 continue;
             }
 
-            log.info("Ссылка прошла проверку");
+            log.info("Ссылка прошла проверку - " + absHref);
             boolean isComplete = pageIndexer.executePageIndexing(absHref, site);
             if (!isComplete) {
                 failedIndexingResponse("Не удалось подключиться к странице: " + absHref);

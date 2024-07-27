@@ -1,6 +1,7 @@
 package searchengine.services;
 
 import lombok.extern.log4j.Log4j2;
+import org.apache.lucene.morphology.WrongCharaterException;
 import org.springframework.stereotype.Service;
 import searchengine.config.SiteDto;
 import searchengine.config.SitesList;
@@ -16,10 +17,7 @@ import searchengine.model.repositories.IndexRepository;
 import searchengine.model.repositories.LemmaRepository;
 import searchengine.model.repositories.PageRepository;
 import searchengine.model.repositories.SiteRepository;
-import searchengine.utils.PageIndexer;
-import searchengine.utils.TextParser;
-import searchengine.utils.TextParserImpl;
-import searchengine.utils.WebParserTask;
+import searchengine.utils.*;
 
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
@@ -56,12 +54,6 @@ public class IndexingServiceImpl implements IndexingService {
         this.pageIndexer = pageIndexer;
         this.textParser = textParser;
     }
-
-    //TODO: -----> taskList                       | priority | level | status
-    // 1) реализовать обработку английских слов   |     3    |   2   |
-    // 2) провести рефакторинг                    |     1    |   1   | IN PROGRESS
-    // 3) пофиксить выдачу результатов по 1 сайту |     2    |   2   | DONE
-
 
     @Override
     public IndexingResponse startIndexing() {
@@ -153,21 +145,23 @@ public class IndexingServiceImpl implements IndexingService {
         if (foundPages.isEmpty()) {
             response.setResult(true);
             response.setCount(0);
-            response.setData(new HashSet<>());
+            response.setData(new ArrayList<>());
         }
 
         HashMap<Page, Double> pageToRelevance = calculateRelevance(foundPages, keyWords);
-        Set<SearchData> dataSet = new TreeSet<>(Comparator.comparing(SearchData::getRelevance));
+        List<SearchData> dataSet = new ArrayList<>();
 
         for (Map.Entry<Page, Double> pair : pageToRelevance.entrySet()) {
             String snippet = getSnippet(pair.getKey().getContent(), keyWords);
             SearchData dataEntity = getPageData(pair.getKey(), pair.getValue(), snippet);
             dataSet.add(dataEntity);
         }
-        Set<SearchData> dataPart = dataSet.stream().skip(offset).limit(limit).collect(Collectors.toSet());
+        dataSet.sort(Comparator.comparing(SearchData::getRelevance).reversed());
+        List<SearchData> dataPart = new ArrayList<>(dataSet.stream().skip(offset).limit(limit).toList());
 
         response.setResult(true);
         response.setCount(dataSet.size());
+
         response.setData(dataPart);
         return response;
     }
@@ -231,22 +225,32 @@ public class IndexingServiceImpl implements IndexingService {
         long maxCount = 0L;
         for (String part : textParts) {
             long keyCount = 0L;
-            List<String> words = Arrays.stream(part.split("\\s+")).toList();
+            List<String> words = Arrays.stream(part.split("[^А-ЯЁа-яёA-Za-z]+")).toList();
             for (Lemma keyWord : keyWords) {
 
                 List<String> keys = words
                         .stream()
                         .filter(word -> {
-                            word = word.replaceAll("[^А-Яа-я]", "");
+                            word = word.replaceAll("[^А-ЯЁа-яёA-Za-z]", "");
                             if (word.isBlank()) {
                                 return false;
                             }
-                            return textParser.getLemma(word.toLowerCase()).equals(keyWord.getLemma());
+
+                            Language language;
+                            if (word.matches("^[a-zA-Z]*$")) {
+                                language = Language.ENGLISH;
+                            } else if (word.matches("^[А-ЯЁа-яё]*$")){
+                                language = Language.RUSSIAN;
+                            } else {
+                                return false;
+                            }
+
+                            return textParser.getLemma(word.toLowerCase(), language).equals(keyWord.getLemma());
                         })
                         .toList();
                 keyCount = keys.size();
                 for (String key : keys) {
-                    key = key.replaceAll("[^А-Яа-я]", "");
+                    key = key.replaceAll("[^А-ЯЁа-яёA-Za-z]", "");
                     part = part.replaceAll(key, "<b>" + key + "</b>");
                 }
             }
@@ -345,7 +349,7 @@ public class IndexingServiceImpl implements IndexingService {
             if (optionalLemma.isPresent()) {
                 Lemma lemmaExist = optionalLemma.get();
                 int pageCount = site.getPageSet().size();
-                if (lemmaExist.getFrequency() < pageCount * 0.8 || pageCount < 100) {
+                if (lemmaExist.getFrequency() < pageCount * 0.7 || pageCount < 50) {
                     keyWords.add(lemmaExist);
                 }
             }
@@ -360,7 +364,7 @@ public class IndexingServiceImpl implements IndexingService {
             AtomicInteger totalFrequency = new AtomicInteger();
             lemmaList.forEach(lemma1 -> totalFrequency.set(totalFrequency.get() + lemma1.getFrequency()));
             int pageCount = pageRepository.findAll().size();
-            if (totalFrequency.get() < pageCount * 0.8 || pageCount < 100) {
+            if (totalFrequency.get() < pageCount * 0.7 || pageCount < 50) {
                 keyWords.addAll(lemmaList);
             }
         });
