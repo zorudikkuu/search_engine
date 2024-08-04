@@ -53,11 +53,9 @@ public class TextParserImpl implements TextParser {
                 continue;
             }
             List<String> wordFormsInfo = morphology.getMorphInfo(word);
-
             if (!wordFormsInfo.stream().allMatch(info -> isIndependent(info, language))) {
                 continue;
             }
-
             List<String> normalForms = morphology.getNormalForms(word);
             if (normalForms.isEmpty()) {
                 continue;

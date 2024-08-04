@@ -1,8 +1,12 @@
 package searchengine.dto.search;
 
 import lombok.Data;
+import lombok.EqualsAndHashCode;
+
+import java.util.Comparator;
 
 @Data
+@EqualsAndHashCode
 public class SearchData {
     private String site;
     private String siteName;

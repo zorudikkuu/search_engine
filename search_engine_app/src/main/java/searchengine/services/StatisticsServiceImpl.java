@@ -12,6 +12,7 @@ import searchengine.model.IndexingStatus;
 import searchengine.model.entities.Site;
 import searchengine.model.repositories.SiteRepository;
 
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -60,7 +61,7 @@ public class StatisticsServiceImpl implements StatisticsService {
         detailedItem.setUrl(site.getUrl());
         detailedItem.setName(site.getName());
         detailedItem.setStatus(String.valueOf(site.getIndexingStatus()));
-        detailedItem.setStatusTime(site.getStatusTime().getSecond());
+        detailedItem.setStatusTime(site.getStatusTime().atZone(ZoneOffset.UTC).getNano());
         detailedItem.setError(site.getLastError() == null ? "" : site.getLastError());
         detailedItem.setPages(site.getPageSet().size());
         detailedItem.setLemmas(site.getLemmaSet().size());

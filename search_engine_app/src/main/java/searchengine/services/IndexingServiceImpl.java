@@ -1,7 +1,9 @@
 package searchengine.services;
 
+import lombok.EqualsAndHashCode;
 import lombok.extern.log4j.Log4j2;
 import org.apache.lucene.morphology.WrongCharaterException;
+import org.hibernate.type.descriptor.java.OffsetTimeJavaDescriptor;
 import org.springframework.stereotype.Service;
 import searchengine.config.SiteDto;
 import searchengine.config.SitesList;
@@ -31,6 +33,7 @@ import java.util.stream.Collectors;
 
 @Log4j2
 @Service
+@EqualsAndHashCode
 public class IndexingServiceImpl implements IndexingService {
     private final SitesList sitesList;
     private ExecutorService executor;
@@ -120,7 +123,7 @@ public class IndexingServiceImpl implements IndexingService {
             return response;
         }
 
-        Optional<Page> optionalPage = pageRepository.findByPath(absHref.substring(endDomainIndex));
+        Optional<Page> optionalPage = pageRepository.findByPathAndSite(absHref.substring(endDomainIndex), site);
         optionalPage.ifPresent(this::clearPageInfo);
 
         executor = Executors.newSingleThreadExecutor();
@@ -147,21 +150,21 @@ public class IndexingServiceImpl implements IndexingService {
             response.setCount(0);
             response.setData(new ArrayList<>());
         }
+        foundPages.forEach(page -> System.out.println(page.getId() + " - " + page.getPath()));
 
         HashMap<Page, Double> pageToRelevance = calculateRelevance(foundPages, keyWords);
-        List<SearchData> dataSet = new ArrayList<>();
+        List<SearchData> dataList = new ArrayList<>();
 
         for (Map.Entry<Page, Double> pair : pageToRelevance.entrySet()) {
             String snippet = getSnippet(pair.getKey().getContent(), keyWords);
             SearchData dataEntity = getPageData(pair.getKey(), pair.getValue(), snippet);
-            dataSet.add(dataEntity);
+            dataList.add(dataEntity);
         }
-        dataSet.sort(Comparator.comparing(SearchData::getRelevance).reversed());
-        List<SearchData> dataPart = new ArrayList<>(dataSet.stream().skip(offset).limit(limit).toList());
+        dataList.sort(Comparator.comparing(SearchData::getRelevance).reversed());
+        List<SearchData> dataPart = dataList.stream().skip(offset).limit(limit).toList();
 
         response.setResult(true);
-        response.setCount(dataSet.size());
-
+        response.setCount(dataList.size());
         response.setData(dataPart);
         return response;
     }
@@ -179,13 +182,17 @@ public class IndexingServiceImpl implements IndexingService {
                 siteRepository, pageRepository,
                 new AtomicBoolean(true), pageIndexer
         );
-        forkJoinPool.invoke(task);
+        Future<Void> future = forkJoinPool.submit(task);
+        try {
+            future.get(4, TimeUnit.HOURS);
+        } catch (InterruptedException | ExecutionException | TimeoutException e) {
+            log.warn("Индексация была прервана");
+        }
 
         if (task.getIsIndexed().get()) {
-            indexingSite.setIndexingStatus(IndexingStatus.INDEXED);
             indexingSite.setStatusTime(LocalDateTime.now());
+            indexingSite.setIndexingStatus(IndexingStatus.INDEXED);
             siteRepository.save(indexingSite);
-            log.info("Сайт успешно проиндексирован");
         }
     }
 
@@ -204,50 +211,14 @@ public class IndexingServiceImpl implements IndexingService {
     }
 
     private String getSnippet (String content, Set<Lemma> keyWords) {
-
-        List<String> textParts = new ArrayList<>();
-        String text = textParser.replaceHtml(content).replaceAll(" +", " ").trim();
-        int startIndex = 0;
-        int endIndex = 300;
-
-        while (endIndex < text.length()) {
-            textParts.add(text.substring(startIndex, endIndex + 1));
-            startIndex = startIndex + 300;
-            endIndex = endIndex + 300;
-        }
-        if (text.length() <= 300) {
-            textParts.add(text);
-        } else {
-            textParts.add(text.substring(endIndex - 300));
-        }
-
+        List<String> textParts = decomposeText(content);
         StringBuilder snippet = new StringBuilder();
         long maxCount = 0L;
         for (String part : textParts) {
             long keyCount = 0L;
             List<String> words = Arrays.stream(part.split("[^А-ЯЁа-яёA-Za-z]+")).toList();
             for (Lemma keyWord : keyWords) {
-
-                List<String> keys = words
-                        .stream()
-                        .filter(word -> {
-                            word = word.replaceAll("[^А-ЯЁа-яёA-Za-z]", "");
-                            if (word.isBlank()) {
-                                return false;
-                            }
-
-                            Language language;
-                            if (word.matches("^[a-zA-Z]*$")) {
-                                language = Language.ENGLISH;
-                            } else if (word.matches("^[А-ЯЁа-яё]*$")){
-                                language = Language.RUSSIAN;
-                            } else {
-                                return false;
-                            }
-
-                            return textParser.getLemma(word.toLowerCase(), language).equals(keyWord.getLemma());
-                        })
-                        .toList();
+                List<String> keys = findKeyWord(words, keyWord);
                 keyCount = keys.size();
                 for (String key : keys) {
                     key = key.replaceAll("[^А-ЯЁа-яёA-Za-z]", "");
@@ -262,6 +233,48 @@ public class IndexingServiceImpl implements IndexingService {
         snippet = new StringBuilder().append("...").append(snippet).append("...");
 
         return snippet.toString();
+    }
+
+    private List<String> decomposeText (String text) {
+        List<String> textParts = new ArrayList<>();
+        text = textParser.replaceHtml(text).replaceAll(" +", " ").trim();
+        int startIndex = 0;
+        int endIndex = 300;
+
+        while (endIndex < text.length()) {
+            textParts.add(text.substring(startIndex, endIndex + 1));
+            startIndex = startIndex + 300;
+            endIndex = endIndex + 300;
+        }
+        if (text.length() <= 300) {
+            textParts.add(text);
+        } else {
+            textParts.add(text.substring(endIndex - 300));
+        }
+        return textParts;
+    }
+
+    private List<String> findKeyWord (List<String> words, Lemma keyWord) {
+        return words
+                .stream()
+                .filter(word -> {
+                    word = word.replaceAll("[^А-ЯЁа-яёA-Za-z]", "");
+                    if (word.isBlank()) {
+                        return false;
+                    }
+
+                    Language language;
+                    if (word.matches("^[a-zA-Z]*$")) {
+                        language = Language.ENGLISH;
+                    } else if (word.matches("^[А-ЯЁа-яё]*$")){
+                        language = Language.RUSSIAN;
+                    } else {
+                        return false;
+                    }
+
+                    return textParser.getLemma(word.toLowerCase(), language).equals(keyWord.getLemma());
+                })
+                .toList();
     }
 
     private HashMap<Page, Double> calculateRelevance (List<Page> pages, Set<Lemma> keyWords) {
@@ -308,13 +321,7 @@ public class IndexingServiceImpl implements IndexingService {
         if (keyWords.isEmpty()) {
             return new ArrayList<>();
         }
-
-        List<Site> sites = keyWords
-                .stream()
-                .map(Lemma::getSite)
-                .distinct()
-                .toList();
-
+        List<Site> sites = keyWords.stream().map(Lemma::getSite).distinct().toList();
         keyWords = new TreeSet<>(keyWords);
         TreeSet<Lemma> allKeyWords = (TreeSet<Lemma>) keyWords;
         List<Page> foundPages = new ArrayList<>();

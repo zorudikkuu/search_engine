@@ -67,13 +67,14 @@ public class WebParserTask extends RecursiveAction {
         for (Element link : links) {
             String href = link.attr("href");
             String absHref = link.attr("abs:href");
-            site.setStatusTime(LocalDateTime.now());
-            siteRepository.save(site);
-
             if (!linkIsValid(href, absHref)) {
                 log.info("Ссылка не прошла проверку - " + absHref);
                 continue;
             }
+            site.setStatusTime(LocalDateTime.now());
+            siteRepository.save(site);
+
+            if (pageRepository.findByPath(href).isPresent()) continue;
 
             log.info("Ссылка прошла проверку - " + absHref);
             boolean isComplete = pageIndexer.executePageIndexing(absHref, site);
@@ -92,15 +93,14 @@ public class WebParserTask extends RecursiveAction {
 
         for (WebParserTask task : taskList) {
             task.fork();
+            task.join();
         }
     }
 
     private boolean linkIsValid (String href, String absHref) {
         boolean hasValidExtension = Arrays.stream(invalidExtensions).noneMatch(extension -> href.toLowerCase().endsWith(extension));
-        boolean isUnique = pageRepository.findByPath(href).isEmpty();
-
         log.info("Ссылка на страницу проверяется на валидность");
-        return hasValidExtension && isUnique && absHref.startsWith(site.getUrl()) && !absHref.contains("#");
+        return hasValidExtension && absHref.startsWith(site.getUrl()) && !absHref.contains("#");
     }
 
     private void failedIndexingResponse (String errorMessage) {
