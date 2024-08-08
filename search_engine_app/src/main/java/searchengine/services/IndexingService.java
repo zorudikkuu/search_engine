@@ -7,5 +7,4 @@ public interface IndexingService {
     IndexingResponse startIndexing ();
     IndexingResponse stopIndexing ();
     IndexingResponse indexPage (String url);
-    SuccessfulSearchResponse search (String query, String siteUrl, int offset, int limit);
 }

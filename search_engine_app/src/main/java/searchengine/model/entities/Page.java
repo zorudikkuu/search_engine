@@ -1,13 +1,10 @@
 package searchengine.model.entities;
 
-import lombok.Data;
-import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.Setter;
 
 import javax.persistence.*;
 import javax.persistence.Index;
-import java.util.Objects;
 import java.util.Set;
 
 @Entity
@@ -34,7 +31,7 @@ public class Page {
     private String content;
 
     @OneToMany(mappedBy = "page", targetEntity = searchengine.model.entities.Index.class, cascade = CascadeType.ALL)
-    private Set<searchengine.model.entities.Index> IndexSet;
+    private Set<searchengine.model.entities.Index> indexSet;
 
 
 }

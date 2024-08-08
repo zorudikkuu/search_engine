@@ -6,7 +6,7 @@ import lombok.Setter;
 import javax.persistence.*;
 
 @Entity
-@Table(name = "1ndex") //"\"index\""
+@Table(name = "\"index\"")
 @Getter
 @Setter
 public class Index {

@@ -1,5 +1,7 @@
 package searchengine.utils;
 
+import lombok.extern.java.Log;
+import lombok.extern.log4j.Log4j2;
 import org.apache.lucene.morphology.LuceneMorphology;
 import org.apache.lucene.morphology.english.EnglishLuceneMorphology;
 import org.apache.lucene.morphology.russian.RussianLuceneMorphology;
@@ -10,6 +12,7 @@ import java.util.HashMap;
 import java.util.List;
 
 @Component
+@Log4j2
 public class TextParserImpl implements TextParser {
     private LuceneMorphology russianMorphology = null;
     private LuceneMorphology englishMorphology = null;
@@ -20,7 +23,7 @@ public class TextParserImpl implements TextParser {
             this.russianMorphology = new RussianLuceneMorphology();
             this.englishMorphology = new EnglishLuceneMorphology();
         } catch (IOException e) {
-            System.out.println(e.getMessage());
+            log.error(e.getMessage());
         }
     }
 
