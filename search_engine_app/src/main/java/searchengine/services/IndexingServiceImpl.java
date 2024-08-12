@@ -40,6 +40,7 @@ public class IndexingServiceImpl implements IndexingService {
     private final PageIndexer pageIndexer;
     private final TextParser textParser;
     private final AtomicBoolean isIndexingBool = new AtomicBoolean();
+    private CountDownLatch latch;
 
     public IndexingServiceImpl (SiteRepository siteRepository, PageRepository pageRepository,
                                 LemmaRepository lemmaRepository, IndexRepository indexRepository,
@@ -65,14 +66,27 @@ public class IndexingServiceImpl implements IndexingService {
         isIndexingBool.set(true);
 
         List<SiteDto> sites = sitesList.getSites();
-        executor = Executors.newFixedThreadPool(sitesList.getSites().size());
+        executor = Executors.newFixedThreadPool(sites.size());
+        latch = new CountDownLatch(sites.size());
 
         for (SiteDto siteDto : sites) {
             executor.submit(() -> executeSiteParsing(siteDto));
         }
+        waitIndexing();
 
         response.setResult(true);
         return response;
+    }
+
+    private void waitIndexing () {
+        new Thread(() -> {
+            try {
+                latch.await();
+            } catch (InterruptedException e) {
+                throw new RuntimeException(e);
+            }
+            isIndexingBool.set(false);
+        }).start();
     }
 
     @Override
@@ -145,20 +159,14 @@ public class IndexingServiceImpl implements IndexingService {
                 siteRepository, pageRepository,
                 new AtomicBoolean(true), pageIndexer
         );
-        Future<Void> future = forkJoinPool.submit(task);
-        try {
-            future.get(4, TimeUnit.HOURS);
-        } catch (InterruptedException | ExecutionException | TimeoutException e) {
-            log.warn("Индексация была прервана");
-        }
-        isIndexingBool.set(false);
-
+        forkJoinPool.invoke(task);
 
         if (task.getIsIndexed().get()) {
             indexingSite.setStatusTime(LocalDateTime.now());
             indexingSite.setIndexingStatus(IndexingStatus.INDEXED);
             siteRepository.save(indexingSite);
         }
+        latch.countDown();
     }
 
 
